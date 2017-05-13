@@ -83,13 +83,14 @@ Set to `nil' to disable long command checks.")
       (error "Error calling `direnv allow', see buffer %s" direnv-buffer-name))))
 
 (defun direnv--get-process ()
-  (get-process direnv-proc))
+  (get-process direnv-process-name))
 
 (defun direnv--clean ()
   (when-let ((proc (direnv--get-process)))
     (interrupt-process proc))
-  (with-current-buffer direnv-buffer-name
-    (delete-region (point-min) (point-max)))
+  (when-let ((buf (get-buffer direnv-buffer-name)))
+    (with-current-buffer buf
+      (delete-region (point-min) (point-max))))
   (direnv--kill-slow-timer))
 
 (defun direnv--check-slow ()
