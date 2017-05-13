@@ -43,7 +43,9 @@
   "The direnv command to use.")
 
 (defcustom direnv-slow-command-delay 1
-  "Delay in seconds before prompting to kill direnv command.")
+  "Delay in seconds before prompting to kill direnv command.
+
+Set to `nil' to disable long command checks.")
 
 (defconst direnv-buffer-name "*direnv*")
 (defconst direnv-process-name "direnv")
@@ -59,8 +61,9 @@
                 :filter #'direnv--filter
                 :sentinel #'direnv--sentinel
                 :stderr "*direnv*")
-  (setq direnv-slow-timer
-        (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow)))
+  (when direnv-slow-command-delay
+    (setq direnv-slow-timer
+          (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow))))
 
 (defun direnv-allow ()
   (interactive)
