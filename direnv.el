@@ -37,6 +37,7 @@
 (require 'env)
 (require 'json)
 (require 'seq)
+(require 'subr-x)
 (require 'timer)
 
 (defcustom direnv-command "direnv"
