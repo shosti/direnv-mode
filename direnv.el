@@ -61,25 +61,39 @@ Set to nil to disable long command checks."
 (defconst direnv-process-name "direnv")
 
 (defvar direnv-slow-timer nil)
+(defvar direnv-blocked-dirs (make-hash-table :test #'equal))
 
 (defun direnv ()
   "Load environment using direnv."
   (interactive)
   (direnv--clean)
-  (make-process :name direnv-process-name
-                :buffer direnv-buffer-name
-                :command (cons direnv-command '("export" "json"))
-                :filter #'direnv--filter
-                :sentinel #'direnv--sentinel
-                :stderr "*direnv*")
-  (when direnv-slow-command-delay
-    (setq direnv-slow-timer
-          (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow))))
+  (if (direnv--blocked-p)
+      (message "direnv: blocked")
+    (make-process :name direnv-process-name
+                  :buffer direnv-buffer-name
+                  :command (cons direnv-command '("export" "json"))
+                  :filter #'direnv--filter
+                  :sentinel #'direnv--sentinel
+                  :stderr "*direnv*")
+    (when direnv-slow-command-delay
+      (setq direnv-slow-timer
+            (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow)))))
 
-(defun direnv-allow ()
-  "Allow the relevant .envrc and load it."
-  (interactive)
+(defun direnv-allow (&optional force)
+  "Allow the relevant .envrc and load it.
+
+Optional prefix argument FORCE means that the relevant .envrc
+will be unblocked if necessary."
+  (interactive "P")
   (direnv--clean)
+
+  (when force
+    (direnv--unblock))
+
+  (when (direnv--blocked-p)
+    (user-error
+     "Current .envrc is blocked in direnv; call with prefix arg to force "))
+
   (if (eq (call-process direnv-command
                         nil
                         (list direnv-buffer-name t)
@@ -92,6 +106,35 @@ Set to nil to disable long command checks."
             (search-forward ".envrc file not found" nil 'noerror)))
         (message ".envrc file not found")
       (error "Error calling `direnv allow', see buffer %s" direnv-buffer-name))))
+
+(defun direnv-block ()
+  "Block the current relevant .envrc.
+
+You will no longer be prompted to allow .envrc if the directory
+is blocked.  Directories can be unblocked by calling
+`direnv-allow' with a prefix argument."
+  (interactive)
+  (if-let ((dir (direnv--find-envrc-dir)))
+      (progn
+        (puthash dir t direnv-blocked-dirs)
+        (message
+         "Direnv disabled for %s; call `direnv-allow' with prefix arg to unblock"
+         dir))
+    (error ".envrc not found in %s" default-directory)))
+
+(defun direnv--unblock ()
+  "Unblock .envrc."
+  (when-let ((dir (direnv--find-envrc-dir)))
+    (remhash dir direnv-blocked-dirs)))
+
+(defun direnv--blocked-p ()
+  "Check whether the relevant .envrc is blocked."
+  (when-let ((dir (direnv--find-envrc-dir)))
+    (gethash dir direnv-blocked-dirs)))
+
+(defun direnv--find-envrc-dir ()
+  "Find the directory with the dominating .envrc."
+  (expand-file-name (locate-dominating-file default-directory ".envrc")))
 
 (defun direnv--get-process ()
   "Get the current direnv process."
@@ -150,18 +193,19 @@ relevant event."
   "Notify the user of a blocked .envrc and prompt for action.
 
 PROMPT specifies an optional prompt to use."
-  (let* ((prompt (or prompt ".envrc is blocked. Allow? (y, n, v to visit) "))
+  (let* ((prompt (or prompt ".envrc is blocked. Allow? (y, n, v to visit, b to block permanently) "))
          (str (read-key (propertize prompt
                                     'face 'minibuffer-prompt))))
     (cond ((member str '(?y ?Y)) (direnv-allow))
           ((member str '(?n ?N ? ?)))
           ((member str '(?v ?V)) (direnv--visit-envrc))
+          ((member str '(?b ?B)) (direnv-block))
           (t (progn
-               (direnv--maybe-allow "Please answer y, n, or v. "))))))
+               (direnv--maybe-allow "Please answer y, n, v, or b. "))))))
 
 (defun direnv--visit-envrc ()
   "Visit the corresponding .envrc file."
-  (when-let ((dir (locate-dominating-file default-directory ".envrc")))
+  (when-let ((dir (direnv--find-envrc-dir)))
     (find-file-other-window (concat dir ".envrc"))
     (shell-script-mode)))
 
