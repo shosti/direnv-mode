@@ -63,6 +63,7 @@ Set to nil to disable long command checks."
 (defvar direnv-slow-timer nil)
 (defvar direnv-blocked-dirs (make-hash-table :test #'equal))
 
+;;;###autoload
 (defun direnv ()
   "Load environment using direnv."
   (interactive)
@@ -79,6 +80,7 @@ Set to nil to disable long command checks."
       (setq direnv-slow-timer
             (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow)))))
 
+;;;###autoload
 (defun direnv-allow (&optional force)
   "Allow the relevant .envrc and load it.
 
@@ -107,6 +109,7 @@ will be unblocked if necessary."
         (message ".envrc file not found")
       (error "Error calling `direnv allow', see buffer %s" direnv-buffer-name))))
 
+;;;###autoload
 (defun direnv-block ()
   "Block the current relevant .envrc.
 
