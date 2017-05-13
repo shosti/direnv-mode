@@ -5,8 +5,8 @@
 ;; Author: Emanuel Evans <mail@emanuel.industries>
 ;; URL: http://github.com/shosti/direnv.el
 ;; Version: 0.0.1
-;; Created: 26 March 2013
-;; Keywords: workspace
+;; Created: 12 May 2017
+;; Keywords: environment
 ;; Package-Requires: ((emacs "25"))
 
 ;; This file is not part of GNU Emacs.
