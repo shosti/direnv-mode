@@ -95,7 +95,7 @@
                    (save-excursion
                      (goto-char (point-min))
                      (search-forward ".envrc is blocked" nil 'noerror)
-                     (yes-or-no-p ".envrc is blocked. Allow?"))))
+                     (y-or-n-p ".envrc is blocked. Allow?"))))
         (direnv-allow))))
 
 (defun direnv--load-env (env)
