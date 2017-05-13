@@ -40,13 +40,22 @@
 (require 'subr-x)
 (require 'timer)
 
+(defgroup direnv nil
+  "Emacs integration with direnv"
+  :group 'environment
+  :prefix "direnv-")
+
 (defcustom direnv-command "direnv"
-  "The direnv command to use.")
+  "The direnv command to use."
+  :group 'direnv
+  :type 'string)
 
 (defcustom direnv-slow-command-delay 1
   "Delay in seconds before prompting to kill direnv command.
 
-Set to nil to disable long command checks.")
+Set to nil to disable long command checks."
+  :group 'direnv
+  :type 'number)
 
 (defconst direnv-buffer-name "*direnv*")
 (defconst direnv-process-name "direnv")
@@ -99,9 +108,9 @@ Set to nil to disable long command checks.")
 
 (defun direnv--check-slow ()
   "Notify the user of a long-running direnv process and prompt to cancel."
-  (let ((buf (switch-to-buffer-other-window direnv-buffer-name)))
-    (unless (y-or-n-p "Direnv is taking a while.  continue? ")
-      (interrupt-process (direnv--get-process)))))
+  (switch-to-buffer-other-window direnv-buffer-name)
+  (unless (y-or-n-p "Direnv is taking a while.  Continue? ")
+    (interrupt-process (direnv--get-process))))
 
 (defun direnv--kill-slow-timer ()
   "Kill any running slow process checker."
@@ -109,7 +118,7 @@ Set to nil to disable long command checks.")
     (cancel-timer direnv-slow-timer)
     (setq direnv-slow-timer nil)))
 
-(defun direnv--filter (proc string)
+(defun direnv--filter (_proc string)
   "Parse and load direnv json output.
 
 PROC is assumed to be the direnv process object and STRING is its
@@ -121,7 +130,7 @@ stdout."
                 (json-end-of-file nil))))
     (direnv--load-env env)))
 
-(defun direnv--sentinel (proc event)
+(defun direnv--sentinel (proc _event)
   "Handle direnv process events.
 
 PROC is assumed to be the direnv process object and EVENT is the
