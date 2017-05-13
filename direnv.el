@@ -74,7 +74,7 @@ Set to `nil' to disable long command checks.")
                         (list direnv-buffer-name t)
                         nil
                         "allow") 0)
-      (message "direnv: allowed .envrc in %s" default-directory)
+      (direnv)
     (if (with-current-buffer direnv-buffer-name
           (save-excursion
             (goto-char (point-min))
