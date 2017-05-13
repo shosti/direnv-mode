@@ -44,8 +44,6 @@
 (defconst direnv-buffer-name "*direnv*")
 (defconst direnv-process-name "direnv")
 
-(defvar direnv-last-env nil)
-
 (defun direnv--get-process ()
   (get-process direnv-proc))
 
@@ -87,7 +85,6 @@
                   (let ((json-key-type 'string))
                     (json-read-from-string string))
                 (json-end-of-file nil))))
-    (setq last-env env)
     (direnv--load-env env)))
 
 (defun direnv--sentinel (proc event)
@@ -102,9 +99,11 @@
         (direnv-allow))))
 
 (defun direnv--load-env (env)
-  (message "direnv: loading...")
-  (unless direnv-last-env
-    (setq direnv-last-env process-environment))
+  (let ((msg (with-current-buffer direnv-buffer-name
+               (save-excursion
+                 (goto-char (point-min))
+                 (buffer-substring (point-min) (point-at-eol))))))
+    (message "%s" msg))
   (seq-each #'direnv--set-env-var env))
 
 (defun direnv--set-env-var (var-pair)
