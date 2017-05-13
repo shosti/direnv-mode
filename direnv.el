@@ -46,7 +46,7 @@
 (defcustom direnv-slow-command-delay 1
   "Delay in seconds before prompting to kill direnv command.
 
-Set to `nil' to disable long command checks.")
+Set to nil to disable long command checks.")
 
 (defconst direnv-buffer-name "*direnv*")
 (defconst direnv-process-name "direnv")
@@ -54,6 +54,7 @@ Set to `nil' to disable long command checks.")
 (defvar direnv-slow-timer nil)
 
 (defun direnv ()
+  "Load environment using direnv."
   (interactive)
   (direnv--clean)
   (make-process :name direnv-process-name
@@ -67,6 +68,7 @@ Set to `nil' to disable long command checks.")
           (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow))))
 
 (defun direnv-allow ()
+  "Allow the relevant .envrc and load it."
   (interactive)
   (direnv--clean)
   (if (eq (call-process direnv-command
@@ -83,9 +85,11 @@ Set to `nil' to disable long command checks.")
       (error "Error calling `direnv allow', see buffer %s" direnv-buffer-name))))
 
 (defun direnv--get-process ()
+  "Get the current direnv process."
   (get-process direnv-process-name))
 
 (defun direnv--clean ()
+  "Clean any running direnv processes."
   (when-let ((proc (direnv--get-process)))
     (interrupt-process proc))
   (when-let ((buf (get-buffer direnv-buffer-name)))
@@ -94,16 +98,22 @@ Set to `nil' to disable long command checks.")
   (direnv--kill-slow-timer))
 
 (defun direnv--check-slow ()
+  "Notify the user of a long-running direnv process and prompt to cancel."
   (let ((buf (switch-to-buffer-other-window direnv-buffer-name)))
-    (unless (y-or-n-p "direnv is taking a while. continue?")
+    (unless (y-or-n-p "Direnv is taking a while.  continue? ")
       (interrupt-process (direnv--get-process)))))
 
 (defun direnv--kill-slow-timer ()
+  "Kill any running slow process checker."
   (when (timerp direnv-slow-timer)
     (cancel-timer direnv-slow-timer)
     (setq direnv-slow-timer nil)))
 
 (defun direnv--filter (proc string)
+  "Parse and load direnv json output.
+
+PROC is assumed to be the direnv process object and STRING is its
+stdout."
   (when-let ((env
               (condition-case nil
                   (let ((json-key-type 'string))
@@ -112,6 +122,10 @@ Set to `nil' to disable long command checks.")
     (direnv--load-env env)))
 
 (defun direnv--sentinel (proc event)
+  "Handle direnv process events.
+
+PROC is assumed to be the direnv process object and EVENT is the
+relevant event."
   (unwind-protect
       (when (and (eq (process-status proc) 'exit)
                  (not (eq (process-exit-status proc) 0))
@@ -124,6 +138,9 @@ Set to `nil' to disable long command checks.")
     (direnv--kill-slow-timer)))
 
 (defun direnv--maybe-allow (&optional prompt)
+  "Notify the user of a blocked .envrc and prompt for action.
+
+PROMPT specifies an optional prompt to use."
   (let* ((prompt (or prompt ".envrc is blocked. Allow? (y, n, v to visit) "))
          (str (read-key (propertize prompt
                                     'face 'minibuffer-prompt))))
@@ -134,11 +151,13 @@ Set to `nil' to disable long command checks.")
                (direnv--maybe-allow "Please answer y, n, or v. "))))))
 
 (defun direnv--visit-envrc ()
+  "Visit the corresponding .envrc file."
   (when-let ((dir (locate-dominating-file default-directory ".envrc")))
     (find-file-other-window (concat dir ".envrc"))
     (shell-script-mode)))
 
 (defun direnv--load-env (env)
+  "Load ENV environment variables provided by direnv."
   (let ((msg (with-current-buffer direnv-buffer-name
                (save-excursion
                  (goto-char (point-min))
@@ -148,6 +167,9 @@ Set to `nil' to disable long command checks.")
   (seq-each #'direnv--set-env-var env))
 
 (defun direnv--set-env-var (var-pair)
+  "Set an environment variable pair VAR-PAIR.
+
+This also takes care of setting `exec-path' when necessary."
   (setenv (car var-pair) (cdr var-pair))
   (when (equal (car var-pair) "PATH")
     (setq exec-path (parse-colon-path (cdr var-pair)))))
