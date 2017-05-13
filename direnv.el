@@ -103,7 +103,8 @@
                (save-excursion
                  (goto-char (point-min))
                  (buffer-substring (point-min) (point-at-eol))))))
-    (message "%s" msg))
+    (unless (string-empty-p msg)
+      (message "%s" msg)))
   (seq-each #'direnv--set-env-var env))
 
 (defun direnv--set-env-var (var-pair)
