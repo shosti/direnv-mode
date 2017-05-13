@@ -136,7 +136,7 @@ Set to `nil' to disable long command checks.")
 (defun direnv--set-env-var (var-pair)
   (setenv (car var-pair) (cdr var-pair))
   (when (equal (car var-pair) "PATH")
-    (setq exec-path (split-string (cdr var-pair) ":"))))
+    (setq exec-path (parse-colon-path (cdr var-pair)))))
 
 (provide 'direnv)
 
