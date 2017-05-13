@@ -120,9 +120,23 @@ Set to `nil' to disable long command checks.")
                      (goto-char (point-min))
                      (search-forward ".envrc is blocked" nil 'noerror))))
         (direnv--kill-slow-timer)
-        (when (y-or-n-p ".envrc is blocked. Allow?")
-          (direnv-allow)))
+        (direnv--maybe-allow))
     (direnv--kill-slow-timer)))
+
+(defun direnv--maybe-allow (&optional prompt)
+  (let* ((prompt (or prompt ".envrc is blocked. Allow? (y, n, v to visit) "))
+         (str (read-key (propertize prompt
+                                    'face 'minibuffer-prompt))))
+    (cond ((member str '(?y ?Y)) (direnv-allow))
+          ((member str '(?n ?N ? ?)))
+          ((member str '(?v ?V)) (direnv--visit-envrc))
+          (t (progn
+               (direnv--maybe-allow "Please answer y, n, or v. "))))))
+
+(defun direnv--visit-envrc ()
+  (when-let ((dir (locate-dominating-file default-directory ".envrc")))
+    (find-file-other-window (concat dir ".envrc"))
+    (shell-script-mode)))
 
 (defun direnv--load-env (env)
   (let ((msg (with-current-buffer direnv-buffer-name
