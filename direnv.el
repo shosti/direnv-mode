@@ -37,15 +37,18 @@
 (require 'env)
 (require 'json)
 (require 'seq)
+(require 'timer)
 
 (defcustom direnv-command "direnv"
   "The direnv command to use.")
 
+(defcustom direnv-slow-command-delay 1
+  "Delay in seconds before prompting to kill direnv command.")
+
 (defconst direnv-buffer-name "*direnv*")
 (defconst direnv-process-name "direnv")
 
-(defun direnv--get-process ()
-  (get-process direnv-proc))
+(defvar direnv-slow-timer nil)
 
 (defun direnv ()
   (interactive)
@@ -55,7 +58,9 @@
                 :command (cons direnv-command '("export" "json"))
                 :filter #'direnv--filter
                 :sentinel #'direnv--sentinel
-                :stderr "*direnv*"))
+                :stderr "*direnv*")
+  (setq direnv-slow-timer
+        (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow)))
 
 (defun direnv-allow ()
   (interactive)
@@ -73,11 +78,25 @@
         (message ".envrc file not found")
       (error "Error calling `direnv allow', see buffer %s" direnv-buffer-name))))
 
+(defun direnv--get-process ()
+  (get-process direnv-proc))
+
 (defun direnv--clean ()
   (when-let ((proc (direnv--get-process)))
-    (kill-process proc))
+    (interrupt-process proc))
   (with-current-buffer direnv-buffer-name
-    (delete-region (point-min) (point-max))))
+    (delete-region (point-min) (point-max)))
+  (direnv--kill-slow-timer))
+
+(defun direnv--check-slow ()
+  (let ((buf (switch-to-buffer-other-window direnv-buffer-name)))
+    (unless (y-or-n-p "direnv is taking a while. continue?")
+      (interrupt-process (direnv--get-process)))))
+
+(defun direnv--kill-slow-timer ()
+  (when (timerp direnv-slow-timer)
+    (cancel-timer direnv-slow-timer)
+    (setq direnv-slow-timer nil)))
 
 (defun direnv--filter (proc string)
   (when-let ((env
@@ -94,9 +113,11 @@
                  (with-current-buffer direnv-buffer-name
                    (save-excursion
                      (goto-char (point-min))
-                     (search-forward ".envrc is blocked" nil 'noerror)
-                     (y-or-n-p ".envrc is blocked. Allow?"))))
-        (direnv-allow))))
+                     (search-forward ".envrc is blocked" nil 'noerror))))
+        (direnv--kill-slow-timer)
+        (when (y-or-n-p ".envrc is blocked. Allow?")
+          (direnv-allow)))
+    (direnv--kill-slow-timer)))
 
 (defun direnv--load-env (env)
   (let ((msg (with-current-buffer direnv-buffer-name
