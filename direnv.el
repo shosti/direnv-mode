@@ -86,7 +86,7 @@ Set to nil to disable long command checks."
   direnv-mode-turn-on)
 
 (defun direnv-mode-turn-on ()
-  "Enable `direnv-mode' for this buffer."
+  "Enable variable `direnv-mode' for this buffer."
   (unless (minibufferp)
     (direnv-mode 1)))
 
@@ -96,7 +96,7 @@ Set to nil to disable long command checks."
   (interactive)
   (unless (or direnv-inhibit
               direnv-running
-              (and (not (called-interactively-p))
+              (and (not (called-interactively-p 'interactive))
                    (equal direnv-last-dir default-directory)))
     (let ((direnv-inhibit t)
           (dir default-directory))
@@ -107,14 +107,14 @@ Set to nil to disable long command checks."
         (let ((direnv-buffer (generate-new-buffer "*direnv-out*"))
               (stderr-buffer (generate-new-buffer "*direnv-stderr*")))
           (setq direnv-checkup-timer (run-with-timer direnv-slow-command-delay nil
-                                                     (direnv--checkup dir direnv-buffer)))
+                                                     (direnv--checkup direnv-buffer)))
           (make-process :name "direnv"
                         :buffer direnv-buffer
                         :command (cons direnv-command '("export" "json"))
                         :sentinel (direnv--sentinel direnv-buffer
                                                     stderr-buffer
                                                     dir
-                                                    (called-interactively-p))
+                                                    (called-interactively-p 'interactive))
                         :stderr stderr-buffer))))))
 
 ;;;###autoload
@@ -175,12 +175,14 @@ is blocked.  Directories can be unblocked by calling
     (gethash dir direnv-blocked-dirs)))
 
 (defun direnv--find-envrc-dir (&optional dir)
-  "Find the directory with the dominating .envrc."
+  "Find the directory with the dominating .envrc.
+Optional argument DIR indicates which directory to start from."
   (when-let ((dir (locate-dominating-file (or dir default-directory) ".envrc")))
     (expand-file-name dir)))
 
-(defun direnv--checkup (dir direnv-buffer)
-  "Notify the user of a long-running direnv process and prompt to cancel."
+(defun direnv--checkup (direnv-buffer)
+  "Notify the user of a long-running direnv process belonging to
+DIRENV-BUFFER and prompt to cancel."
   (lambda ()
     (when direnv-running
       (let ((direnv-inhibit t)
@@ -199,6 +201,8 @@ is blocked.  Directories can be unblocked by calling
           (setq direnv-running nil))))))
 
 (defun direnv--parse (direnv-buffer stderr-buffer)
+  "Parse direnv output in DIRENV-BUFFER.
+STDERR-BUFFER should contain direnv's stderr output."
   (let ((direnv-inhibit t))
     (when-let ((env
                 (condition-case nil
@@ -215,7 +219,10 @@ is blocked.  Directories can be unblocked by calling
                          called-interactively)
   "Return a function that handles direnv process events.
 
-CALLED-INTERACTIVELY indicates that `direnv' was called
+DIRENV-BUFFER should be the parent of the process.
+STDERR-BUFFER should contain the process's sterr.
+DIR indicates the directory for which direnv is working.
+CALLED-INTERACTIVELY indicates that direnv was called
 interactively so blocking feedback is acceptable."
   (lambda (proc _event)
     (let ((direnv-inhibit t))
@@ -258,13 +265,14 @@ PROMPT specifies an optional prompt to use."
     (message ".envrc is blocked, please call `direnv-allow' to allow.")))
 
 (defun direnv--visit-envrc (&optional dir)
-  "Visit the corresponding .envrc file."
+  "Visit the corresponding .envrc file in DIR or the current directory."
   (when-let ((dir (direnv--find-envrc-dir dir)))
     (find-file-other-window (concat dir ".envrc"))
     (shell-script-mode)))
 
 (defun direnv--load-env (env stderr-buffer)
-  "Load ENV environment variables provided by direnv."
+  "Load ENV environment variables provided by direnv.
+STDERR-BUFFER should contain direnv's stderr output."
   (let ((msg (with-current-buffer stderr-buffer
                (save-excursion
                  (goto-char (point-min))
@@ -283,13 +291,14 @@ This also takes care of setting `exec-path' when necessary."
     (setq exec-path (parse-colon-path (cdr var-pair)))))
 
 (defun direnv--hook ()
-  "Hook to use to set up direnv in `direnv-mode'."
+  "Hook to use to set up direnv the current buffer."
   (when (and direnv-mode
              (not direnv-inhibit)
              (not (seq-find #'funcall direnv-disable-functions)))
     (direnv)))
 
 (defun direnv-incompatible-mode-p ()
+  "Check for minor modes that are incompatible with direnv."
   (seq-find
    (lambda (sym)
      (and (boundp sym) (symbol-value sym)))
