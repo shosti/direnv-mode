@@ -291,8 +291,7 @@ STDERR-BUFFER should contain direnv's stderr output."
                  (goto-char (point-min))
                  (buffer-substring (point-min) (point-at-eol))))))
     (unless (string-empty-p msg)
-      ;; (message "%s" msg)
-      ))
+      (message "%s" msg)))
   (seq-each #'direnv--set-env-var env))
 
 (defun direnv--set-env-var (var-pair)
