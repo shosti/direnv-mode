@@ -68,7 +68,8 @@ Set to nil to disable long command checks."
   :group 'direnv
   :type 'list)
 
-(defvar direnv-blocked-dirs (make-hash-table :test #'equal))
+(defvar direnv-blocked-dirs (make-hash-table :test 'equal))
+(defvar direnv-dominating-dirs-cache (make-hash-table :test 'equal))
 (defvar direnv-inhibit nil)
 (defvar direnv-last-dir nil)
 (defvar direnv-running nil)
@@ -88,6 +89,7 @@ Set to nil to disable long command checks."
 (defun direnv-mode-turn-on ()
   "Enable variable `direnv-mode' for this buffer."
   (unless (minibufferp)
+    (add-hook 'after-save-hook #'direnv--check-envrc-save)
     (direnv-mode 1)))
 
 ;;;###autoload
@@ -164,6 +166,10 @@ is blocked.  Directories can be unblocked by calling
          dir))
     (error ".envrc not found in %s" default-directory)))
 
+(defun direnv-clear-caches ()
+  "Clear out all direnv caches."
+  (setq direnv-dominating-dirs-cache (make-hash-table :test 'equal)))
+
 (defun direnv--unblock ()
   "Unblock .envrc."
   (when-let ((dir (direnv--find-envrc-dir)))
@@ -177,8 +183,15 @@ is blocked.  Directories can be unblocked by calling
 (defun direnv--find-envrc-dir (&optional dir)
   "Find the directory with the dominating .envrc.
 Optional argument DIR indicates which directory to start from."
-  (when-let ((dir (locate-dominating-file (or dir default-directory) ".envrc")))
-    (expand-file-name dir)))
+  (let ((current-dir (or dir default-directory)))
+    (if-let ((dominating-dir (gethash current-dir direnv-dominating-dirs-cache)))
+        (if (eq dominating-dir :none)
+            nil
+          (expand-file-name dominating-dir))
+      (if-let ((dominating-dir (locate-dominating-file current-dir ".envrc")))
+          (puthash current-dir (expand-file-name dominating-dir) direnv-dominating-dirs-cache)
+        (puthash current-dir :none direnv-dominating-dirs)
+        nil))))
 
 (defun direnv--checkup (direnv-buffer)
   "Notify the user of a long-running direnv process belonging to
@@ -297,6 +310,11 @@ This also takes care of setting `exec-path' when necessary."
              (not (seq-find #'funcall direnv-disable-functions)))
     (direnv)))
 
+(defun direnv--check-envrc-save ()
+  "Clear caches if current buffer is a .envrc file."
+  (when (equal (file-name-nondirectory (buffer-file-name)) ".envrc")
+    (direnv-clear-caches)))
+
 (defun direnv-incompatible-mode-p ()
   "Check for minor modes that are incompatible with direnv."
   (seq-find
@@ -310,7 +328,8 @@ This also takes care of setting `exec-path' when necessary."
 
 (defun direnv--remove-hooks ()
   "Remove hooks to set up direnv."
-  (remove-hook 'buffer-list-update-hook #'direnv--hook))
+  (remove-hook 'buffer-list-update-hook #'direnv--hook)
+  (remove-hook 'after-save-hook #'direnv--check-envrc-save))
 
 (provide 'direnv)
 
