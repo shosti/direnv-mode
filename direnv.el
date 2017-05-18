@@ -58,25 +58,21 @@ Set to nil to disable long command checks."
   :type 'number)
 
 (defcustom direnv-disable-functions (list #'minibufferp
-                                          #'direnv-in-direnv-buffer-p
                                           #'direnv-incompatible-mode-p)
   "List of functions that determine whether to disable direnv."
   :group 'direnv
   :type 'list)
 
-(defcustom direnv-incompatible-minor-modes '(helm-mode)
+(defcustom direnv-incompatible-minor-modes '(helm-mode edebug-mode)
   "List of minor modes that are incompatible with direnv tracking."
   :group 'direnv
   :type 'list)
 
-(defconst direnv-out-buffer-name "*direnv*")
-(defconst direnv-proc-buffer-name "*direnv-process*")
-(defconst direnv-process-name "direnv")
-
-(defvar direnv-slow-timer nil)
 (defvar direnv-blocked-dirs (make-hash-table :test #'equal))
 (defvar direnv-inhibit nil)
 (defvar direnv-last-dir nil)
+(defvar direnv-running nil)
+(defvar direnv-checkup-timer nil)
 
 (define-minor-mode direnv-mode
   "Minor mode for automatically setting environment variables with direnv."
@@ -98,22 +94,28 @@ Set to nil to disable long command checks."
 (defun direnv ()
   "Load environment using direnv."
   (interactive)
-  (message "B: DIRENV-INHIBIT: %s" direnv-inhibit)
-  (unless (or direnv-inhibit (equal direnv-last-dir default-directory))
-    (message "DIRENV-LAST-DIR: %s" direnv-last-dir)
-    (setq direnv-last-dir default-directory)
-    (direnv--clean)
-    (if (direnv--blocked-p)
-        (message "direnv: blocked")
-      (make-process :name direnv-process-name
-                    :buffer direnv-proc-buffer-name
-                    :command (cons direnv-command '("export" "json"))
-                    :filter #'direnv--filter
-                    :sentinel (direnv--sentinel (called-interactively-p))
-                    :stderr "*direnv*")
-      (when direnv-slow-command-delay
-        (setq direnv-slow-timer
-              (run-with-timer direnv-slow-command-delay nil #'direnv--check-slow))))))
+  (unless (or direnv-inhibit
+              direnv-running
+              (and (not (called-interactively-p))
+                   (equal direnv-last-dir default-directory)))
+    (let ((direnv-inhibit t)
+          (dir default-directory))
+      (setq direnv-last-dir dir)
+      (setq direnv-running t)
+      (if (direnv--blocked-p)
+          (message "direnv: blocked")
+        (let ((direnv-buffer (generate-new-buffer "*direnv-out*"))
+              (stderr-buffer (generate-new-buffer "*direnv-stderr*")))
+          (setq direnv-checkup-timer (run-with-timer direnv-slow-command-delay nil
+                                                     (direnv--checkup dir direnv-buffer)))
+          (make-process :name "direnv"
+                        :buffer direnv-buffer
+                        :command (cons direnv-command '("export" "json"))
+                        :sentinel (direnv--sentinel direnv-buffer
+                                                    stderr-buffer
+                                                    dir
+                                                    (called-interactively-p))
+                        :stderr stderr-buffer))))))
 
 ;;;###autoload
 (defun direnv-allow (&optional force)
@@ -122,27 +124,29 @@ Set to nil to disable long command checks."
 Optional prefix argument FORCE means that the relevant .envrc
 will be unblocked if necessary."
   (interactive "P")
-  (direnv--clean)
+  (let ((direnv-inhibit t))
+    (when force
+      (direnv--unblock))
 
-  (when force
-    (direnv--unblock))
+    (when (direnv--blocked-p)
+      (user-error
+       "Current .envrc is blocked in direnv; call with prefix arg to force "))
 
-  (when (direnv--blocked-p)
-    (user-error
-     "Current .envrc is blocked in direnv; call with prefix arg to force "))
-
-  (if (eq (call-process direnv-command
-                        nil
-                        (list direnv-out-buffer-name t)
-                        nil
-                        "allow") 0)
-      (direnv)
-    (if (with-current-buffer direnv-out-buffer-name
-          (save-excursion
-            (goto-char (point-min))
-            (search-forward ".envrc file not found" nil 'noerror)))
-        (message ".envrc file not found")
-      (error "Error calling `direnv allow', see buffer %s" direnv-out-buffer-name))))
+    (with-temp-buffer
+      (if (eq (call-process direnv-command
+                            nil
+                            t
+                            nil
+                            "allow" "json") 0)
+          (let ((direnv-inhibit nil)
+                (direnv-last-dir nil))
+            (direnv)
+            (message "direnv: allowed %s" default-directory))
+        (if (save-excursion
+              (goto-char (point-min))
+              (search-forward ".envrc file not found" nil 'noerror))
+            (message ".envrc file not found")
+          (error "Error calling `direnv allow': %s" (buffer-string)))))))
 
 ;;;###autoload
 (defun direnv-block ()
@@ -170,60 +174,45 @@ is blocked.  Directories can be unblocked by calling
   (when-let ((dir (direnv--find-envrc-dir)))
     (gethash dir direnv-blocked-dirs)))
 
-(defun direnv--find-envrc-dir ()
+(defun direnv--find-envrc-dir (&optional dir)
   "Find the directory with the dominating .envrc."
-  (when-let ((dir (locate-dominating-file default-directory ".envrc")))
+  (when-let ((dir (locate-dominating-file (or dir default-directory) ".envrc")))
     (expand-file-name dir)))
 
-(defun direnv--get-process ()
-  "Get the current direnv process."
-  (get-buffer-process direnv-proc-buffer-name))
-
-(defun direnv--clean ()
-  "Clean any running direnv processes."
-  (when-let ((proc (direnv--get-process)))
-    (when (process-live-p proc)
-      (kill-process proc)))
-  (when-let ((buf (get-buffer direnv-out-buffer-name)))
-    (with-current-buffer buf
-      (delete-region (point-min) (point-max))))
-  (direnv--kill-slow-timer))
-
-(defun direnv--check-slow ()
+(defun direnv--checkup (dir direnv-buffer)
   "Notify the user of a long-running direnv process and prompt to cancel."
-  (let ((direnv-inhibit t))
-    (let ((answer
-           (read-key
-            (propertize
-             "Direnv is taking a while.  Continue? (y, n, v to visit buffer, b to block .envrc)"
-             'face 'minibuffer-prompt))))
-      (cond ((member answer '(?n ?N))
-             (kill-process (direnv--get-process)))
-            ((member answer '(?v ?V)) (direnv--visit-envrc)
-             (message "DIRENV-INHIBIT: %s" direnv-inhibit)
-             (switch-to-buffer-other-window direnv-out-buffer-name))
-            ((member answer '(?b ?B)) (direnv-block))))))
+  (lambda ()
+    (when direnv-running
+      (let ((direnv-inhibit t)
+            (proc (get-buffer-process direnv-buffer)))
+        (if (process-live-p proc)
+            (let ((answer
+                   (read-key
+                    (propertize
+                     "Direnv is taking a while.  Continue? (y, n, v to visit buffer, b to block .envrc)"
+                     'face 'minibuffer-prompt))))
+              (cond ((member answer '(?n ?N))
+                     (kill-process (get-buffer-process direnv-buffer)))
+                    ((member answer '(?v ?V)) (direnv--visit-envrc)
+                     (switch-to-buffer-other-window direnv-buffer))
+                    ((member answer '(?b ?B)) (direnv-block))))
+          (setq direnv-running nil))))))
 
-(defun direnv--kill-slow-timer ()
-  "Kill any running slow process checker."
-  (when (timerp direnv-slow-timer)
-    (cancel-timer direnv-slow-timer)
-    (setq direnv-slow-timer nil)))
-
-(defun direnv--filter (_proc string)
-  "Parse and load direnv json output.
-
-PROC is assumed to be the direnv process object and STRING is its
-stdout."
+(defun direnv--parse (direnv-buffer stderr-buffer)
   (let ((direnv-inhibit t))
     (when-let ((env
                 (condition-case nil
                     (let ((json-key-type 'string))
-                      (json-read-from-string string))
+                      (with-current-buffer direnv-buffer
+                        (goto-char (point-min))
+                        (json-read)))
                   (json-end-of-file nil))))
-      (direnv--load-env env))))
+      (direnv--load-env env stderr-buffer))))
 
-(defun direnv--sentinel (called-interactively)
+(defun direnv--sentinel (direnv-buffer
+                         stderr-buffer
+                         dir
+                         called-interactively)
   "Return a function that handles direnv process events.
 
 CALLED-INTERACTIVELY indicates that `direnv' was called
@@ -231,15 +220,23 @@ interactively so blocking feedback is acceptable."
   (lambda (proc _event)
     (let ((direnv-inhibit t))
       (unwind-protect
-          (when (and (eq (process-status proc) 'exit)
-                     (not (eq (process-exit-status proc) 0))
-                     (with-current-buffer direnv-out-buffer-name
-                       (save-excursion
-                         (goto-char (point-min))
-                         (search-forward ".envrc is blocked" nil 'noerror))))
-            (direnv--kill-slow-timer)
-            (direnv--maybe-allow called-interactively))
-        (direnv--kill-slow-timer)))))
+          (when (eq (process-status proc) 'exit)
+            (cancel-timer direnv-checkup-timer)
+            (if (eq (process-exit-status proc) 0)
+                ;; We don't want to actually apply the vars if the directory has
+                ;; changed.
+                (when (equal default-directory dir)
+                  (direnv--parse direnv-buffer stderr-buffer))
+              (when (with-current-buffer stderr-buffer
+                      (save-excursion
+                        (goto-char (point-min))
+                        (search-forward ".envrc is blocked" nil 'noerror)))
+                (direnv--maybe-allow called-interactively)))
+            (let ((kill-buffer-query-functions nil))
+              (kill-buffer direnv-buffer)
+              (kill-buffer stderr-buffer)))
+        (unless (process-live-p proc)
+          (setq direnv-running nil))))))
 
 (defun direnv--maybe-allow (prompt-for-allow &optional prompt)
   "Notify the user of a blocked .envrc and prompt for action.
@@ -260,20 +257,21 @@ PROMPT specifies an optional prompt to use."
                    (direnv--maybe-allow "Please answer y, n, v, or b. ")))))
     (message ".envrc is blocked, please call `direnv-allow' to allow.")))
 
-(defun direnv--visit-envrc ()
+(defun direnv--visit-envrc (&optional dir)
   "Visit the corresponding .envrc file."
-  (when-let ((dir (direnv--find-envrc-dir)))
+  (when-let ((dir (direnv--find-envrc-dir dir)))
     (find-file-other-window (concat dir ".envrc"))
     (shell-script-mode)))
 
-(defun direnv--load-env (env)
+(defun direnv--load-env (env stderr-buffer)
   "Load ENV environment variables provided by direnv."
-  (let ((msg (with-current-buffer direnv-out-buffer-name
+  (let ((msg (with-current-buffer stderr-buffer
                (save-excursion
                  (goto-char (point-min))
                  (buffer-substring (point-min) (point-at-eol))))))
     (unless (string-empty-p msg)
-      (message "%s" msg)))
+      ;; (message "%s" msg)
+      ))
   (seq-each #'direnv--set-env-var env))
 
 (defun direnv--set-env-var (var-pair)
@@ -287,13 +285,9 @@ This also takes care of setting `exec-path' when necessary."
 (defun direnv--hook ()
   "Hook to use to set up direnv in `direnv-mode'."
   (when (and direnv-mode
+             (not direnv-inhibit)
              (not (seq-find #'funcall direnv-disable-functions)))
     (direnv)))
-
-(defun direnv-in-direnv-buffer-p ()
-  "Return non-nil if currently in a direnv buffer."
-  (member (buffer-name)
-          (list direnv-out-buffer-name direnv-proc-buffer-name)))
 
 (defun direnv-incompatible-mode-p ()
   (seq-find
