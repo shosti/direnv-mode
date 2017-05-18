@@ -96,7 +96,7 @@ Set to nil to disable long command checks."
   (interactive)
   (unless (or direnv-inhibit
               direnv-running
-              (and (not (called-interactively-p 'interactive))
+              (and (not (called-interactively-p 'any))
                    (equal direnv-last-dir default-directory)))
     (let ((direnv-inhibit t)
           (dir default-directory))
@@ -114,7 +114,7 @@ Set to nil to disable long command checks."
                         :sentinel (direnv--sentinel direnv-buffer
                                                     stderr-buffer
                                                     dir
-                                                    (called-interactively-p 'interactive))
+                                                    (called-interactively-p 'any))
                         :stderr stderr-buffer))))))
 
 ;;;###autoload
