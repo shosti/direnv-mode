@@ -190,7 +190,7 @@ Optional argument DIR indicates which directory to start from."
           (expand-file-name dominating-dir))
       (if-let ((dominating-dir (locate-dominating-file current-dir ".envrc")))
           (puthash current-dir (expand-file-name dominating-dir) direnv-dominating-dirs-cache)
-        (puthash current-dir :none direnv-dominating-dirs)
+        (puthash current-dir :none direnv-dominating-dirs-cache)
         nil))))
 
 (defun direnv--checkup (direnv-buffer)
