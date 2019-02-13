@@ -93,7 +93,7 @@ Set to nil to disable long command checks."
     (direnv-mode 1)))
 
 ;;;###autoload
-(defun direnv ()
+(defun direnv (&optional _rest)
   "Load environment using direnv."
   (interactive)
   (unless (or direnv-inhibit
